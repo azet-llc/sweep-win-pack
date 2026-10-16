@@ -32,9 +32,15 @@ jobs:
           foreach ($f in @("dist\Sweep-$env:V-setup.exe")) { $s = Get-AuthenticodeSignature $f; "installer signature: $($s.Status) $($s.SignerCertificate.Subject)" }
       - name: End-to-end
         run: windows\e2e.ps1
-      - name: Installed binaries' signatures
-        if: always()
-        run: Get-ChildItem in -ErrorAction SilentlyContinue | Out-Null
+      - name: Diagnostics
+        if: failure()
+        run: |
+          $d = "$env:ProgramData\AZET Sweep"
+          Get-ChildItem $d -Recurse -ErrorAction SilentlyContinue | Select FullName, Length | Format-Table -AutoSize | Out-String -Width 200
+          $tok = (Get-Content "$d\ui-token" -ErrorAction SilentlyContinue).Trim()
+          if ($tok) { Invoke-RestMethod -Uri http://127.0.0.1:47853/api/state -Headers @{ Authorization = "Bearer $tok"; 'X-Sweep' = '1' } | ConvertTo-Json -Depth 6 }
+          Get-ChildItem $d -Recurse -Include *.log, *.txt -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.FullName)"; Get-Content $_.FullName -Tail 60 }
+          Get-WinEvent -LogName Application -MaxEvents 30 -ErrorAction SilentlyContinue | Where-Object ProviderName -match 'Sweep' | Format-List TimeCreated, Message
       - uses: actions/upload-artifact@v4
         if: always()
         with:
