@@ -1,0 +1,43 @@
+name: pack
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: write
+env:
+  V: "0.1.29"
+  GH_TOKEN: ${{ github.token }}
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Inputs
+        run: |
+          gh release download "inputs-$env:V" --repo $env:GITHUB_REPOSITORY -p "sweep-win-inputs-*.tar.gz" -D in
+          tar -xzf (Get-ChildItem in\*.tar.gz)[0].FullName
+      - name: Installer (signed one if it is on the release, else compile)
+        run: |
+          $names = gh release view "inputs-$env:V" --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          if ($names -contains "Sweep-$env:V-setup.exe") {
+            gh release download "inputs-$env:V" --repo $env:GITHUB_REPOSITORY -p "Sweep-$env:V-setup.exe" -D dist
+          } else {
+            $p = "${env:ProgramFiles(x86)}\Inno Setup 6"
+            if (-not (Test-Path "$p\ISCC.exe")) { choco install innosetup -y --no-progress | Out-Null }
+            & "$p\ISCC.exe" /Q /DAppVersion=$env:V windows\installer\Sweep.iss
+            if ($LASTEXITCODE) { exit 1 }
+            Copy-Item "dist\Sweep-$env:V-setup.exe" "Sweep-$env:V-setup.unsigned.exe"
+            gh release upload "inputs-$env:V" --repo $env:GITHUB_REPOSITORY "Sweep-$env:V-setup.unsigned.exe" --clobber
+          }
+          foreach ($f in @("dist\Sweep-$env:V-setup.exe")) { $s = Get-AuthenticodeSignature $f; "installer signature: $($s.Status) $($s.SignerCertificate.Subject)" }
+      - name: End-to-end
+        run: windows\e2e.ps1
+      - name: Installed binaries' signatures
+        if: always()
+        run: Get-ChildItem in -ErrorAction SilentlyContinue | Out-Null
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shots
+          path: dist/shots/
+          retention-days: 3
