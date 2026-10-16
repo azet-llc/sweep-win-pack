@@ -5,7 +5,7 @@ on:
 permissions:
   contents: write
 env:
-  V: "0.1.29"
+  V: "0.1.30"
   GH_TOKEN: ${{ github.token }}
 jobs:
   windows:
@@ -47,3 +47,30 @@ jobs:
           name: shots
           path: dist/shots/
           retention-days: 3
+  mac:
+    runs-on: macos-latest
+    env:
+      MV: "0.1.28"
+    steps:
+      - name: Notarized pkg
+        run: |
+          gh release download "inputs-$V" --repo $GITHUB_REPOSITORY -p "Sweep-$MV.pkg" -D dl
+          pkgutil --check-signature dl/Sweep-$MV.pkg | head -4
+          spctl -a -vv -t install dl/Sweep-$MV.pkg
+      - name: Install, block, uninstall
+        run: |
+          sudo installer -pkg dl/Sweep-$MV.pkg -target /
+          D="/Library/Application Support/AZET Sweep"
+          for i in $(seq 60); do [ -f "$D/ui-token" ] && break; sleep 2; done
+          sudo launchctl print system/io.azet.sweep.daemon | grep -E "state|pid" | head -3
+          T=$(sudo cat "$D/ui-token")
+          for i in $(seq 40); do S=$(curl -s -H "Authorization: Bearer $T" -H "X-Sweep: 1" http://127.0.0.1:47853/api/state); echo "$S" | grep -q '"state":"enabling"' || break; sleep 3; done
+          echo "$S" | python3 -c 'import json,sys; s=json.load(sys.stdin)["status"]; print("state",s.get("state"),"protected",s.get("protected"),"issues",[i.get("code") for i in s.get("issues") or []])'
+          scutil --dns | grep nameserver | sort -u | head
+          AD=$(dscacheutil -q host -a name doubleclick.net | awk '/ip_address/{print $2}' | head -1); echo "doubleclick.net -> $AD"
+          OK=$(dscacheutil -q host -a name example.com | awk '/ip_address/{print $2}' | head -1); echo "example.com -> $OK"
+          codesign -dv /Applications/Sweep.app 2>&1 | grep -E "Authority=Developer ID Application|runtime"
+          [ "$AD" = "0.0.0.0" ] && [ -n "$OK" ] && [ "$OK" != "0.0.0.0" ]
+          sudo /Applications/Sweep.app/Contents/Resources/uninstall.sh
+          sleep 5; ! sudo launchctl print system/io.azet.sweep.daemon >/dev/null 2>&1 && echo "daemon removed"
+          scutil --dns | grep nameserver | sort -u | head -3
